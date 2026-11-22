@@ -2,76 +2,75 @@ import json
 import os
 import uuid
 from datetime import date
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
-class BaseJsonRepository:
-    def __init__(self, file_path: str):
+class JsonFileRepository:
+    def __init__(self, file_path: str) -> None:
         self.file_path = file_path
 
-    def _ensure_dir(self) -> None:
-        directory = os.path.dirname(self.file_path)
-        if directory:
-            os.makedirs(directory, exist_ok=True)
+    def _ensure_parent_directory(self) -> None:
+        parent_directory = os.path.dirname(self.file_path)
+        if parent_directory:
+            os.makedirs(parent_directory, exist_ok=True)
 
-    def _read_json(self, default):
+    def _read_data(self, default_value: Any) -> Any:
         if not os.path.exists(self.file_path):
-            return default
+            return default_value
         try:
-            with open(self.file_path, "r", encoding="utf-8") as file:
-                return json.load(file)
+            with open(self.file_path, "r", encoding="utf-8") as file_handle:
+                return json.load(file_handle)
         except (json.JSONDecodeError, OSError):
-            return default
+            return default_value
 
-    def _write_json(self, data) -> None:
-        self._ensure_dir()
-        with open(self.file_path, "w", encoding="utf-8") as file:
-            json.dump(data, file, indent=2, ensure_ascii=False)
+    def _write_data(self, payload: Any) -> None:
+        self._ensure_parent_directory()
+        with open(self.file_path, "w", encoding="utf-8") as file_handle:
+            json.dump(payload, file_handle, indent=2, ensure_ascii=False)
 
 
-class BudgetRepository(BaseJsonRepository):
-    def __init__(self, file_path: str = "data/budget.json"):
+class BudgetRepository(JsonFileRepository):
+    def __init__(self, file_path: str = "data/budget.json") -> None:
         super().__init__(file_path)
 
-    def get_budget_data(self) -> Optional[Dict]:
-        data = self._read_json(None)
+    def get_budget_configuration(self) -> Optional[Dict[str, Any]]:
+        data = self._read_data(None)
         if not isinstance(data, dict) or data.get("initial_budget") is None:
             return None
         return data
 
-    def save_initial_setup(
+    def save_budget_configuration(
         self,
         initial_budget: float,
-        reset_rule: Dict,
-        lock_policy: Dict
+        reset_rule: Dict[str, Any],
+        lock_policy: Dict[str, Any],
     ) -> None:
-        data = {
-            "initial_budget": initial_budget,
+        configuration = {
+            "initial_budget": round(initial_budget, 2),
             "reset_rule": reset_rule,
-            "lock_policy": lock_policy
+            "lock_policy": lock_policy,
         }
-        self._write_json(data)
+        self._write_data(configuration)
 
 
-class TransactionRepository(BaseJsonRepository):
-    def __init__(self, file_path: str = "data/transactions.json"):
+class TransactionRepository(JsonFileRepository):
+    def __init__(self, file_path: str = "data/transactions.json") -> None:
         super().__init__(file_path)
 
     @staticmethod
-    def _month_key(year: int, month: int) -> str:
+    def _build_month_key(year: int, month: int) -> str:
         return f"{month:02d}-{year}"
 
     @staticmethod
-    def _day_key(target_date: date) -> str:
+    def _build_day_key(target_date: date) -> str:
         return f"{target_date.day:02d}-{target_date.month:02d}"
 
-    def get_month_transactions(self, year: int, month: int) -> Dict[str, List[Dict]]:
-        data = self._read_json({})
-        return data.get(self._month_key(year, month), {})
-
-    def get_day_transactions(self, target_date: date) -> List[Dict]:
-        month_data = self.get_month_transactions(target_date.year, target_date.month)
-        return list(month_data.get(self._day_key(target_date), []))
+    def get_month_transactions(self, year: int, month: int) -> Dict[str, List[Dict[str, Any]]]:
+        data = self._read_data({})
+        if not isinstance(data, dict):
+            return {}
+        month_bucket = data.get(self._build_month_key(year, month), {})
+        return month_bucket if isinstance(month_bucket, dict) else {}
 
     def add_transaction(
         self,
@@ -79,153 +78,175 @@ class TransactionRepository(BaseJsonRepository):
         title: str,
         description: str,
         amount: float,
-        tx_type: str
-    ) -> Dict:
-        data = self._read_json({})
-        m_key = self._month_key(target_date.year, target_date.month)
-        d_key = self._day_key(target_date)
+        transaction_type: str,
+    ) -> Dict[str, Any]:
+        data = self._read_data({})
+        if not isinstance(data, dict):
+            data = {}
 
-        new_tx = {
+        month_key = self._build_month_key(target_date.year, target_date.month)
+        day_key = self._build_day_key(target_date)
+
+        created_transaction = {
             "id": f"tx_{uuid.uuid4().hex[:8]}",
             "title": title,
             "description": description,
             "amount": round(amount, 2),
-            "type": tx_type
+            "type": transaction_type,
         }
-        data.setdefault(m_key, {}).setdefault(d_key, []).append(new_tx)
-        self._write_json(data)
-        return new_tx
+        data.setdefault(month_key, {}).setdefault(day_key, []).append(created_transaction)
+        self._write_data(data)
+        return created_transaction
 
     def update_transaction(
         self,
         target_date: date,
-        tx_id: str,
+        transaction_id: str,
         title: str,
         description: str,
         amount: float,
-        tx_type: str
+        transaction_type: str,
     ) -> bool:
-        data = self._read_json({})
-        m_key = self._month_key(target_date.year, target_date.month)
-        d_key = self._day_key(target_date)
-        day_list = data.get(m_key, {}).get(d_key, [])
+        data = self._read_data({})
+        month_key = self._build_month_key(target_date.year, target_date.month)
+        day_key = self._build_day_key(target_date)
+        day_transactions = data.get(month_key, {}).get(day_key, [])
 
-        for tx in day_list:
-            if tx["id"] == tx_id:
-                tx["title"] = title
-                tx["description"] = description
-                tx["amount"] = round(amount, 2)
-                tx["type"] = tx_type
-                self._write_json(data)
+        for transaction in day_transactions:
+            if transaction.get("id") == transaction_id:
+                transaction["title"] = title
+                transaction["description"] = description
+                transaction["amount"] = round(amount, 2)
+                transaction["type"] = transaction_type
+                self._write_data(data)
                 return True
         return False
 
-    def delete_transaction(self, target_date: date, tx_id: str) -> bool:
-        data = self._read_json({})
-        m_key = self._month_key(target_date.year, target_date.month)
-        d_key = self._day_key(target_date)
-        day_list = data.get(m_key, {}).get(d_key, [])
+    def delete_transaction(self, target_date: date, transaction_id: str) -> bool:
+        data = self._read_data({})
+        month_key = self._build_month_key(target_date.year, target_date.month)
+        day_key = self._build_day_key(target_date)
+        day_transactions = data.get(month_key, {}).get(day_key, [])
 
-        filtered = [tx for tx in day_list if tx["id"] != tx_id]
-        if len(filtered) == len(day_list):
+        remaining_transactions = [
+            tx for tx in day_transactions if tx.get("id") != transaction_id
+        ]
+        if len(remaining_transactions) == len(day_transactions):
             return False
 
-        if filtered:
-            data[m_key][d_key] = filtered
-        else:
-            del data[m_key][d_key]
-            if not data[m_key]:
-                del data[m_key]
-
-        self._write_json(data)
+        self._store_updated_day_transactions(data, month_key, day_key, remaining_transactions)
+        self._write_data(data)
         return True
 
+    @staticmethod
+    def _store_updated_day_transactions(
+        data: Dict[str, Any],
+        month_key: str,
+        day_key: str,
+        remaining_transactions: List[Dict[str, Any]],
+    ) -> None:
+        if remaining_transactions:
+            data[month_key][day_key] = remaining_transactions
+            return
 
-class RecurringRepository(BaseJsonRepository):
-    def __init__(self, file_path: str = "data/recurring.json"):
+        del data[month_key][day_key]
+        if not data[month_key]:
+            del data[month_key]
+
+
+class RecurringRepository(JsonFileRepository):
+    def __init__(self, file_path: str = "data/recurring.json") -> None:
         super().__init__(file_path)
 
-    def get_all(self) -> List[Dict]:
-        return self._read_json([])
+    def get_all_definitions(self) -> List[Dict[str, Any]]:
+        data = self._read_data([])
+        return data if isinstance(data, list) else []
 
-    def add_recurring(
+    def add_definition(
         self,
         title: str,
         description: str,
         amount: float,
-        tx_type: str,
+        transaction_type: str,
         start_year: int,
         start_month: int,
-        day_rule: Dict
-    ) -> Dict:
-        items = self.get_all()
-        new_item = {
+        day_rule: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        definitions = self.get_all_definitions()
+        new_definition = {
             "id": f"rec_{uuid.uuid4().hex[:8]}",
             "title": title,
             "description": description,
             "amount": round(amount, 2),
-            "type": tx_type,
+            "type": transaction_type,
             "start_year": start_year,
             "start_month": start_month,
             "end_year": None,
             "end_month": None,
             "skipped_months": [],
-            "day_rule": day_rule
+            "day_rule": day_rule,
         }
-        items.append(new_item)
-        self._write_json(items)
-        return new_item
+        definitions.append(new_definition)
+        self._write_data(definitions)
+        return new_definition
 
-    def update_recurring(
+    def update_definition(
         self,
-        rec_id: str,
+        recurring_id: str,
         title: str,
         description: str,
         amount: float,
-        tx_type: str
+        transaction_type: str,
     ) -> bool:
-        items = self.get_all()
-        for item in items:
-            if item["id"] == rec_id:
-                item["title"] = title
-                item["description"] = description
-                item["amount"] = round(amount, 2)
-                item["type"] = tx_type
-                self._write_json(items)
+        definitions = self.get_all_definitions()
+        for definition in definitions:
+            if definition.get("id") == recurring_id:
+                definition["title"] = title
+                definition["description"] = description
+                definition["amount"] = round(amount, 2)
+                definition["type"] = transaction_type
+                self._write_data(definitions)
                 return True
         return False
 
-    def skip_month(self, rec_id: str, year: int, month: int) -> bool:
-        items = self.get_all()
+    def skip_month(self, recurring_id: str, year: int, month: int) -> bool:
+        definitions = self.get_all_definitions()
         month_tag = f"{month:02d}-{year}"
-        for item in items:
-            if item["id"] == rec_id:
-                if month_tag not in item["skipped_months"]:
-                    item["skipped_months"].append(month_tag)
-                    self._write_json(items)
+        for definition in definitions:
+            if definition.get("id") == recurring_id:
+                skipped = definition.setdefault("skipped_months", [])
+                if month_tag not in skipped:
+                    skipped.append(month_tag)
+                    self._write_data(definitions)
                 return True
         return False
 
-    def stop_or_delete_recurring(self, rec_id: str, from_year: int, from_month: int) -> bool:
-        items = self.get_all()
-        updated_items = []
+    def stop_or_remove_definition(
+        self,
+        recurring_id: str,
+        effective_year: int,
+        effective_month: int,
+    ) -> bool:
+        definitions = self.get_all_definitions()
+        updated_definitions: List[Dict[str, Any]] = []
         found = False
 
-        for item in items:
-            if item["id"] != rec_id:
-                updated_items.append(item)
+        for definition in definitions:
+            if definition.get("id") != recurring_id:
+                updated_definitions.append(definition)
                 continue
 
             found = True
-            if (item["start_year"], item["start_month"]) >= (from_year, from_month):
+            started_at = (definition["start_year"], definition["start_month"])
+            if started_at >= (effective_year, effective_month):
                 continue
 
-            prev_year = from_year - 1 if from_month == 1 else from_year
-            prev_month = 12 if from_month == 1 else from_month - 1
-            item["end_year"] = prev_year
-            item["end_month"] = prev_month
-            updated_items.append(item)
+            previous_year = effective_year - 1 if effective_month == 1 else effective_year
+            previous_month = 12 if effective_month == 1 else effective_month - 1
+            definition["end_year"] = previous_year
+            definition["end_month"] = previous_month
+            updated_definitions.append(definition)
 
         if found:
-            self._write_json(updated_items)
+            self._write_data(updated_definitions)
         return found
