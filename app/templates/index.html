@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Home Budget Planner</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="{% if budget_data is not none %}dashboard-view{% endif %}">
+    <div id="nav">
+        <a href="{{ url_for('main.index') }}" class="brand">Home Budget Planner</a>
+        {% if budget_data is not none or details is defined %}
+            <a href="{{ url_for('main.settings_view') }}" class="nav-settings-btn" title="Ustawienia">&#9881; Ustawienia</a>
+        {% endif %}
+    </div>
+
+    <div id="content" class="{% if budget_data is not none %}wide-content{% endif %}">
+        {% if budget_data is not none %}
+            <div class="budget-summary">
+                <div class="summary-row">
+                    <span>
+                        Pozostało w aktualnym miesiącu ({{ calendar_data.current_month_label }}):
+                        <strong>{{ "%.2f"|format(calendar_data.current_month_remaining) }} zł</strong>
+                    </span>
+                    <span class="summary-divider">|</span>
+                    <span>
+                        Wyświetlany miesiąc ({{ calendar_data.month_label }}):
+                        <strong>{{ "%.2f"|format(calendar_data.viewed_month_remaining) }} zł</strong>
+                        <small>(wydatki: -{{ "%.2f"|format(calendar_data.viewed_month_expenses) }} zł, przychody: +{{ "%.2f"|format(calendar_data.viewed_month_incomes) }} zł, śr. dzienna: {{ "%.2f"|format(calendar_data.daily_average) }} zł)</small>
+                    </span>
+                </div>
+            </div>
+
+            <div class="calendar-wrapper">
+                <a class="month-arrow"
+                   href="{{ url_for('main.index', year=calendar_data.prev_year, month=calendar_data.prev_month) }}"
+                   title="Poprzedni miesiąc">&#10216;</a>
+
+                <div class="calendar-container">
+                    <h3 class="calendar-title">{{ calendar_data.month_label }}</h3>
+
+                    <div class="calendar-grid"
+                         style="grid-template-rows: auto repeat({{ calendar_data.weeks|length }}, 1fr);">
+                        <div class="weekday-header">Pon</div>
+                        <div class="weekday-header">Wt</div>
+                        <div class="weekday-header">Śr</div>
+                        <div class="weekday-header">Czw</div>
+                        <div class="weekday-header">Pt</div>
+                        <div class="weekday-header">Sob</div>
+                        <div class="weekday-header">Nie</div>
+
+                        {% for week in calendar_data.weeks %}
+                            {% for cell in week %}
+                                {% if cell is none %}
+                                    <div class="day-cell empty-cell"></div>
+                                {% else %}
+                                    <a href="{{ url_for('main.day_view', iso_date=cell.iso_date) }}"
+                                       class="day-cell status-{{ cell.status_color }} {% if cell.is_today %}today-cell{% endif %} {% if cell.is_locked %}locked-cell{% endif %}">
+                                        <div class="day-header">
+                                            <span class="day-number">{{ cell.day }}</span>
+                                            {% if cell.is_locked %}
+                                                <span class="lock-badge" title="Edycja zablokowana">&#128274;</span>
+                                            {% endif %}
+                                        </div>
+                                        <div class="day-body">
+                                            {% if cell.expenses > 0 %}
+                                                <div class="day-amount expense-text">-{{ "%.2f"|format(cell.expenses) }} zł</div>
+                                            {% endif %}
+                                            {% if cell.incomes > 0 %}
+                                                <div class="day-amount income-text">+{{ "%.2f"|format(cell.incomes) }} zł</div>
+                                            {% endif %}
+                                        </div>
+                                    </a>
+                                {% endif %}
+                            {% endfor %}
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <a class="month-arrow"
+                   href="{{ url_for('main.index', year=calendar_data.next_year, month=calendar_data.next_month) }}"
+                   title="Następny miesiąc">&#10217;</a>
+            </div>
+        {% else %}
+            <p>Witamy<br>Zacznijmy porządkować budżet</p>
+
+            {% if error %}
+                <p class="error">{{ error }}</p>
+            {% endif %}
+
+            <button id="start-btn" type="button" {% if show_form %}style="display:none;"{% endif %}>
+                Rozpocznij planowanie budżetu
+            </button>
+
+            <form id="setup-form" action="{{ url_for('main.setup_budget') }}" method="POST"
+                  {% if not show_form %}style="display:none;"{% endif %}>
+
+                <div class="form-group">
+                    <label for="reset_day">W jaki dzień miesiąca następuje reset budżetu? (1–31)</label>
+                    <input type="number" id="reset_day" name="reset_day" min="1" max="31" required>
+                </div>
+
+                <div id="reset-short-months" class="short-months-box"></div>
+
+                <div class="form-group">
+                    <label for="initial_budget">Kwota bazowa dla miesiąca (zł)</label>
+                    <input type="number" id="initial_budget" name="initial_budget" step="0.01" min="0.01" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="lock_mode">Kiedy blokować możliwość edycji budżetu?</label>
+                    <select id="lock_mode" name="lock_mode">
+                        <option value="NEVER">Nigdy</option>
+                        <option value="LAST_DAY">Ostatniego dnia następnego miesiąca</option>
+                        <option value="SPECIFIC_DAY">Konkretnego dnia następnego miesiąca</option>
+                    </select>
+                </div>
+
+                <div class="form-group" id="lock-day-group" style="display:none;">
+                    <label for="lock_day">Którego dnia następnego miesiąca blokować edycję? (1–31)</label>
+                    <input type="number" id="lock_day" name="lock_day" min="1" max="31">
+                </div>
+
+                <div id="lock-short-months" class="short-months-box"></div>
+
+                <button type="submit">Zapisz budżet</button>
+            </form>
+        {% endif %}
+    </div>
+
+    <script>
+        function renderShortMonthInputs(dayValue, container, fieldPrefix) {
+            const day = parseInt(dayValue, 10);
+            container.innerHTML = "";
+            if (isNaN(day) || day < 29 || day > 31) return;
+
+            const variants = [
+                { minDay: 31, len: 30, label: "Dzień dla miesięcy 30-dniowych (1–30):" },
+                { minDay: 30, len: 29, label: "Dzień dla lutego przestępnego 29-dniowego (1–29):" },
+                { minDay: 29, len: 28, label: "Dzień dla lutego zwykłego 28-dniowego (1–28):" }
+            ];
+
+            variants.forEach(v => {
+                if (day >= v.minDay) {
+                    const group = document.createElement("div");
+                    group.className = "form-group sub-group";
+                    group.innerHTML = `
+                        <label for="${fieldPrefix}_${v.len}">${v.label}</label>
+                        <input type="number" id="${fieldPrefix}_${v.len}" name="${fieldPrefix}_${v.len}"
+                               min="1" max="${v.len}" value="${v.len}" required>
+                    `;
+                    container.appendChild(group);
+                }
+            });
+        }
+
+        const startBtn = document.getElementById("start-btn");
+        const setupForm = document.getElementById("setup-form");
+        const resetDayInput = document.getElementById("reset_day");
+        const resetShortBox = document.getElementById("reset-short-months");
+        const lockModeSelect = document.getElementById("lock_mode");
+        const lockDayGroup = document.getElementById("lock-day-group");
+        const lockDayInput = document.getElementById("lock_day");
+        const lockShortBox = document.getElementById("lock-short-months");
+
+        if (startBtn) {
+            startBtn.addEventListener("click", () => {
+                startBtn.style.display = "none";
+                setupForm.style.display = "block";
+            });
+        }
+
+        if (resetDayInput) {
+            resetDayInput.addEventListener("input", () => {
+                renderShortMonthInputs(resetDayInput.value, resetShortBox, "reset_short");
+            });
+        }
+
+        if (lockModeSelect) {
+            lockModeSelect.addEventListener("change", () => {
+                if (lockModeSelect.value === "SPECIFIC_DAY") {
+                    lockDayGroup.style.display = "flex";
+                    lockDayInput.required = true;
+                    renderShortMonthInputs(lockDayInput.value, lockShortBox, "lock_short");
+                } else {
+                    lockDayGroup.style.display = "none";
+                    lockDayInput.required = false;
+                    lockDayInput.value = "";
+                    lockShortBox.innerHTML = "";
+                }
+            });
+        }
+
+        if (lockDayInput) {
+            lockDayInput.addEventListener("input", () => {
+                renderShortMonthInputs(lockDayInput.value, lockShortBox, "lock_short");
+            });
+        }
+    </script>
+</body>
+</html>

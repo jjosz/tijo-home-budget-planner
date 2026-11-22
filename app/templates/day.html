@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <title>Dzień {{ details.iso_date }} - Home Budget Planner</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <div id="nav">
+        <a href="{{ url_for('main.index') }}" class="brand">Home Budget Planner</a>
+        {% if budget_data is not none or details is defined %}
+            <a href="{{ url_for('main.settings_view') }}" class="nav-settings-btn" title="Ustawienia">&#9881; Ustawienia</a>
+        {% endif %}
+    </div>
+
+    <div id="content" class="day-page">
+        <div class="top-bar">
+            <a class="back-link" href="{{ url_for('main.index', year=details.year, month=details.month) }}">
+                &#10216; Powrót do kalendarza
+            </a>
+            <h2>Data: {{ details.iso_date }} {% if details.is_locked %}&#128274; (Zablokowany){% endif %}</h2>
+        </div>
+
+        <div class="stats-bar">
+            <div class="stat-card">
+                <span class="stat-label">Przewidziany średni budżet dzienny</span>
+                <strong>{{ "%.2f"|format(details.daily_average) }} zł</strong>
+            </div>
+            <div class="stat-card">
+                <span class="stat-label">Pozostały budżet miesiąca</span>
+                <strong>{{ "%.2f"|format(details.remaining_budget) }} zł</strong>
+            </div>
+        </div>
+
+        {% if error %}
+            <p class="error">{{ error }}</p>
+        {% endif %}
+
+        {% if not details.is_locked %}
+            <div class="action-buttons">
+                <button type="button" onclick="togglePanel('panel-one-time')">Dodaj operację</button>
+                <button type="button" onclick="togglePanel('panel-recurring')">Dodaj powtarzalną operację</button>
+            </div>
+
+            <!-- Formularz 1: Jednorazowy wydatek / przychód -->
+            <form id="panel-one-time" class="card-form" style="display:none;"
+                  action="{{ url_for('main.add_transaction', iso_date=details.iso_date) }}" method="POST">
+                <h3>Nowa operacja jednorazowa</h3>
+                <div class="form-group">
+                    <label>Typ operacji</label>
+                    <select name="tx_type">
+                        <option value="EXPENSE">Wydatek</option>
+                        <option value="INCOME">Przychód</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Kwota (zł)</label>
+                    <input type="number" name="amount" step="0.01" min="0.01" required>
+                </div>
+                <div class="form-group">
+                    <label>Tytuł</label>
+                    <input type="text" name="title" minlength="2" required>
+                </div>
+                <div class="form-group">
+                    <label>Opis (opcjonalnie)</label>
+                    <input type="text" name="description">
+                </div>
+                <button type="submit">Zapisz operację</button>
+            </form>
+
+            <!-- Formularz 2: Powtarzalny wydatek / przychód (subskrypcja) -->
+            <form id="panel-recurring" class="card-form" style="display:none;"
+                  action="{{ url_for('main.add_recurring_transaction', iso_date=details.iso_date) }}" method="POST">
+                <h3>Nowa operacja powtarzalna (co miesiąc, dnia {{ details.day }})</h3>
+                <div class="form-group">
+                    <label>Typ operacji</label>
+                    <select name="tx_type">
+                        <option value="EXPENSE">Wydatek (subskrypcja)</option>
+                        <option value="INCOME">Przychód stały</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Kwota (zł)</label>
+                    <input type="number" name="amount" step="0.01" min="0.01" required>
+                </div>
+                <div class="form-group">
+                    <label>Tytuł</label>
+                    <input type="text" name="title" minlength="2" required>
+                </div>
+                <div class="form-group">
+                    <label>Opis (opcjonalnie)</label>
+                    <input type="text" name="description">
+                </div>
+
+                {% if details.day >= 31 %}
+                    <div class="form-group sub-group">
+                        <label>Dzień dla miesięcy 30-dniowych (1–30):</label>
+                        <input type="number" name="rec_short_30" min="1" max="30" value="30" required>
+                    </div>
+                {% endif %}
+                {% if details.day >= 30 %}
+                    <div class="form-group sub-group">
+                        <label>Dzień dla lutego przestępnego 29-dniowego (1–29):</label>
+                        <input type="number" name="rec_short_29" min="1" max="29" value="29" required>
+                    </div>
+                {% endif %}
+                {% if details.day >= 29 %}
+                    <div class="form-group sub-group">
+                        <label>Dzień dla lutego zwykłego 28-dniowego (1–28):</label>
+                        <input type="number" name="rec_short_28" min="1" max="28" value="28" required>
+                    </div>
+                {% endif %}
+
+                <button type="submit">Zapisz operację powtarzalną</button>
+            </form>
+        {% endif %}
+
+        <h3>Operacje w tym dniu</h3>
+        {% if not details['items'] %}
+            <p class="empty-msg">Brak zapisanych operacji dla tego dnia.</p>
+        {% else %}
+            <div class="tx-list">
+                {% for item in details['items'] %}
+                    <div class="tx-card">
+                        <div class="tx-main">
+                            <div>
+                                <strong>{{ item.title }}</strong>
+                                {% if item.is_recurring %}
+                                    <span class="badge-rec">Powtarzalny</span>
+                                {% endif %}
+                                {% if item.description %}
+                                    <p class="tx-desc">{{ item.description }}</p>
+                                {% endif %}
+                            </div>
+                            <div class="tx-amount {{ 'income-text' if item.type == 'INCOME' else 'expense-text' }}">
+                                {{ '+' if item.type == 'INCOME' else '-' }}{{ "%.2f"|format(item.amount) }} zł
+                            </div>
+                        </div>
+
+                        {% if not details.is_locked %}
+                            <div class="tx-actions">
+                                <button type="button" class="btn-small"
+                                        onclick="togglePanel('edit-{{ item.id }}')">Edytuj</button>
+
+                                {% if item.is_recurring %}
+                                    <form action="{{ url_for('main.delete_item', iso_date=details.iso_date) }}" method="POST" class="inline-form">
+                                        <input type="hidden" name="item_id" value="{{ item.id }}">
+                                        <input type="hidden" name="is_recurring" value="true">
+                                        <input type="hidden" name="scope" value="MONTH_ONLY">
+                                        <button type="submit" class="btn-small btn-warn">Usuń tylko w tym miesiącu</button>
+                                    </form>
+                                    <form action="{{ url_for('main.delete_item', iso_date=details.iso_date) }}" method="POST" class="inline-form">
+                                        <input type="hidden" name="item_id" value="{{ item.id }}">
+                                        <input type="hidden" name="is_recurring" value="true">
+                                        <input type="hidden" name="scope" value="ENTIRE_SUBSCRIPTION">
+                                        <button type="submit" class="btn-small btn-danger">Usuń subskrypcję</button>
+                                    </form>
+                                {% else %}
+                                    <form action="{{ url_for('main.delete_item', iso_date=details.iso_date) }}" method="POST" class="inline-form">
+                                        <input type="hidden" name="item_id" value="{{ item.id }}">
+                                        <input type="hidden" name="is_recurring" value="false">
+                                        <button type="submit" class="btn-small btn-danger">Usuń</button>
+                                    </form>
+                                {% endif %}
+                            </div>
+
+                            <!-- Formularz edycji wpisu -->
+                            <form id="edit-{{ item.id }}" class="edit-form" style="display:none;"
+                                  action="{{ url_for('main.edit_item', iso_date=details.iso_date) }}" method="POST">
+                                <input type="hidden" name="item_id" value="{{ item.id }}">
+                                <input type="hidden" name="is_recurring" value="{{ 'true' if item.is_recurring else 'false' }}">
+                                <select name="tx_type">
+                                    <option value="EXPENSE" {% if item.type == 'EXPENSE' %}selected{% endif %}>Wydatek</option>
+                                    <option value="INCOME" {% if item.type == 'INCOME' %}selected{% endif %}>Przychód</option>
+                                </select>
+                                <input type="number" name="amount" step="0.01" min="0.01" value="{{ item.amount }}" required>
+                                <input type="text" name="title" value="{{ item.title }}" required>
+                                <input type="text" name="description" value="{{ item.description }}">
+                                <button type="submit" class="btn-small">Zapisz zmiany</button>
+                            </form>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+    </div>
+
+    <script>
+        function togglePanel(panelId) {
+            const el = document.getElementById(panelId);
+            if (!el) return;
+            el.style.display = el.style.display === "none" ? "block" : "none";
+        }
+    </script>
+</body>
+</html>
